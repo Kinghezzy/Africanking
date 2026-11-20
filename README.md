@@ -250,3 +250,8 @@ Apache-2.0 — See [LICENSE](LICENSE)
 ---
 
 **Built on Stellar · BuenDia Builders 2026**
+
+## Handsoff notes
+
+<!-- handsoff-issue-92 -->
+- #92: [Integration] Add exportable cooperative audit package
