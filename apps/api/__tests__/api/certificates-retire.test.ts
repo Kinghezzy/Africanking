@@ -50,6 +50,11 @@ vi.mock("@/server/stellar/network-config", () => ({
   }),
 }))
 
+vi.mock("@/server/stellar/transaction-service", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/stellar/transaction-service")>()),
+  getTransactionService: () => ({ invokeContract: vi.fn() }),
+}))
+
 vi.mock("@/lib/contracts-config", () => ({
   CONTRACTS: { ENERGY_TOKEN: "CFAKECONTRACT" },
   STELLAR_CONFIG: { RPC_URL: "https://fake-rpc.stellar.org" },

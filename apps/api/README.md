@@ -25,3 +25,19 @@ At startup (`instrumentation.ts`) the API checks the network passphrase, the RPC
 - `GET /api/health/config` returns a secret-free summary and a `sha256:` configuration fingerprint. Use it to compare environments after a deploy.
 
 Rollout: set `STELLAR_DEPLOYMENT_MANIFEST` in every API environment **before** deploying this version. Without it, testnet only gets a warning, but `PUBLIC` refuses to start.
+
+## Stellar transaction service
+
+All contract writes (`/api/mint`, `/api/certificates/retire`) go through `server/stellar/transaction-service.ts`. It handles simulation, fee and resource assembly, submission, bounded polling, and error classification in one place.
+
+| Code | HTTP | Meaning | On-chain? |
+|---|---|---|---|
+| `SIMULATION_FAILED` | 422 | Contract rejected the call in simulation | No |
+| `SUBMISSION_REJECTED` | 502 | RPC returned `ERROR` (result code in `details`) | No |
+| `TRY_AGAIN_LATER` / `RPC_UNAVAILABLE` | 503 | Retryable, nothing submitted | No |
+| `FAILED` | 502 | Included in a ledger but failed | Yes (fee charged) |
+| `TIMEOUT` / `UNKNOWN_STATUS` | 504 / 502 | Submitted, outcome unknown. Reconcile by `tx_hash` | Maybe |
+
+Ambiguous network errors during submission re-send the **same signed envelope**, never a rebuilt transaction, so a retry cannot double-mint. Every failure is written to `audit_log` with its structured reason and hash.
+
+Rollout note: legacy readings now keep `status = 'pending'` with `tx_hash` set while an outcome is unknown, and `/api/mint` answers `409 UNRECONCILED_TRANSACTION` until an operator reconciles them. Only non-retryable failures that never reached the ledger still mark a reading `failed`.
