@@ -14,7 +14,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { ArrowLeft, ArrowDownLeft, ArrowUpRight, Loader2 } from "lucide-react"
 import Link from "next/link"
-import { APP_NETWORK, walletNetworkMismatch } from "@/lib/stellar-network"
+import { APP_NETWORK } from "@/lib/stellar-network"
 import {
   contractEventToDisplay,
   mergeActivity,
@@ -31,7 +31,7 @@ import {
 } from "@/components/activity/activity-list"
 
 export default function ActivityPage() {
-  const { isConnected, address, network: walletNetwork } = useWallet()
+  const { isConnected, address, networkMismatch: walletMismatch } = useWallet()
   const { session, isLoading: authLoading } = useAuth()
   const { t } = useI18n()
   const router = useRouter()
@@ -45,7 +45,6 @@ export default function ActivityPage() {
     contractEvents.records.length === 0 &&
     recorded.events.length === 0
 
-  const walletMismatch = isConnected ? walletNetworkMismatch(APP_NETWORK, { network: walletNetwork }) : null
 
   const sources = useMemo<ActivitySource[]>(
     () => [

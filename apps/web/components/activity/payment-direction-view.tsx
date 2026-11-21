@@ -11,7 +11,7 @@ import { DashboardHeader } from "@/components/dashboard-header"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { ArrowLeft, ArrowDownLeft, ArrowUpRight, Loader2 } from "lucide-react"
-import { APP_NETWORK, walletNetworkMismatch } from "@/lib/stellar-network"
+import { APP_NETWORK } from "@/lib/stellar-network"
 import { paymentToDisplay } from "@/lib/activity/display"
 import { ActivityRow, DataSourceLine, LoadMoreButton, NetworkNotice, SourceNotice } from "./activity-list"
 
@@ -20,7 +20,7 @@ import { ActivityRow, DataSourceLine, LoadMoreButton, NetworkNotice, SourceNotic
  * Horizon payments only — Soroban token events are shown on /activity.
  */
 export function PaymentDirectionView({ direction }: { direction: "in" | "out" }) {
-  const { isConnected, address, network: walletNetwork } = useWallet()
+  const { isConnected, address, networkMismatch: walletMismatch } = useWallet()
   const { session, isLoading: authLoading } = useAuth()
   const { t } = useI18n()
   const router = useRouter()
@@ -56,7 +56,6 @@ export function PaymentDirectionView({ direction }: { direction: "in" | "out" })
 
   const isIncoming = direction === "in"
   const Icon = isIncoming ? ArrowDownLeft : ArrowUpRight
-  const walletMismatch = isConnected ? walletNetworkMismatch(APP_NETWORK, { network: walletNetwork }) : null
 
   return (
     <div className="min-h-screen bg-background">
