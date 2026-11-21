@@ -8,7 +8,7 @@ import {
 } from "@creit.tech/stellar-wallets-kit";
 import { Horizon } from "@stellar/stellar-sdk";
 import { storage } from "./storage"
-import { networkPassphrase, stellarNetwork, getHorizonHost } from "./stellar-config";
+import { networkPassphrase, stellarNetwork, horizonUrl } from "./stellar-config";
 
 // Initialize Stellar Wallets Kit
 let kitInstance: StellarWalletsKit | null = null;
@@ -90,8 +90,8 @@ export const disconnectWallet = async (): Promise<void> => {
   storage.removeItem("networkPassphrase");
 };
 
-// Create Horizon server instance
-const horizon = new Horizon.Server(getHorizonHost(stellarNetwork), {
+// Create Horizon server instance — same configured endpoint as activity history
+const horizon = new Horizon.Server(horizonUrl, {
   allowHttp: stellarNetwork === "LOCAL",
 });
 
