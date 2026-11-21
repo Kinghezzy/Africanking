@@ -41,6 +41,15 @@ vi.mock("@stellar/stellar-sdk", () => ({
   nativeToScVal: vi.fn(),
 }))
 
+const stellarConfigState = vi.hoisted(() => ({ writesEnabled: true }))
+
+vi.mock("@/server/stellar/network-config", () => ({
+  getStellarConfigReport: () => ({
+    writesEnabled: stellarConfigState.writesEnabled,
+    fingerprint: "sha256:test-fingerprint",
+  }),
+}))
+
 vi.mock("@/lib/contracts-config", () => ({
   CONTRACTS: { ENERGY_TOKEN: "CFAKECONTRACT" },
   STELLAR_CONFIG: { RPC_URL: "https://fake-rpc.stellar.org" },
@@ -61,6 +70,7 @@ describe("POST /api/certificates/retire", () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    stellarConfigState.writesEnabled = true
     process.env = { ...originalEnv }
   })
 

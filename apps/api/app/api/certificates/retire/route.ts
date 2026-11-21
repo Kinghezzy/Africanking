@@ -5,6 +5,7 @@ import { CONTRACTS, STELLAR_CONFIG, NETWORK_PASSPHRASE } from "@/lib/contracts-c
 import { requireAuth, isSession } from "@/lib/auth/middleware"
 import { validateBody } from "@/lib/validation/validate"
 import { retireSchema } from "@/lib/validation/schemas"
+import { getStellarConfigReport } from "@/server/stellar/network-config"
 import { safeDbError, safeCatchError } from "@/lib/errors/safe-error"
 
 // POST: authenticated — buyer retires certificate
@@ -45,6 +46,18 @@ export async function POST(req: NextRequest) {
     const contractAddress = CONTRACTS.ENERGY_TOKEN
     if (!contractAddress) {
       return NextResponse.json({ error: "Server configuration error" }, { status: 500 })
+    }
+
+    const stellarConfig = getStellarConfigReport()
+    if (!stellarConfig.writesEnabled) {
+      return NextResponse.json(
+        {
+          error: "Stellar write operations are disabled: configuration is invalid or incomplete",
+          code: "WRITES_DISABLED",
+          config_fingerprint: stellarConfig.fingerprint,
+        },
+        { status: 503 }
+      )
     }
 
     // Burn on-chain

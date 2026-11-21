@@ -89,6 +89,15 @@ vi.mock("@stellar/stellar-sdk", () => ({
   BASE_FEE: "100",
 }))
 
+const stellarConfigState = vi.hoisted(() => ({ writesEnabled: true }))
+
+vi.mock("@/server/stellar/network-config", () => ({
+  getStellarConfigReport: () => ({
+    writesEnabled: stellarConfigState.writesEnabled,
+    fingerprint: "sha256:test-fingerprint",
+  }),
+}))
+
 vi.mock("@/lib/contracts-config", () => ({
   CONTRACTS: { ENERGY_TOKEN: "CFAKECONTRACT" },
   STELLAR_CONFIG: { RPC_URL: "https://fake-rpc.stellar.org" },
@@ -109,6 +118,7 @@ describe("POST /api/mint", () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    stellarConfigState.writesEnabled = true
     process.env = { ...originalEnv }
     mockGetAccount.mockResolvedValue({ id: "account" })
     mockPrepareTransaction.mockResolvedValue({ sign: vi.fn() })
@@ -155,6 +165,18 @@ describe("POST /api/mint", () => {
 
     const res = await POST(makeRequest({ reading_id: READING_ID }))
     expect(res.status).toBe(500)
+  })
+
+  it("rechaza escrituras cuando la configuración Stellar es inválida → 503", async () => {
+    process.env.MINTER_SECRET_KEY = "SFAKE"
+    stellarConfigState.writesEnabled = false
+
+    const res = await POST(makeRequest({ reading_id: READING_ID }))
+    expect(res.status).toBe(503)
+    const json = await res.json()
+    expect(json.code).toBe("WRITES_DISABLED")
+    expect(json.config_fingerprint).toBe("sha256:test-fingerprint")
+    expect(mockSendTransaction).not.toHaveBeenCalled()
   })
 
   it("rechaza certificate con status != pending → 400", async () => {

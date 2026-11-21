@@ -5,6 +5,7 @@ import { CONTRACTS, STELLAR_CONFIG, NETWORK_PASSPHRASE } from "@/lib/contracts-c
 import { requireAuth, isSession } from "@/lib/auth/middleware"
 import { validateBody } from "@/lib/validation/validate"
 import { mintSchema } from "@/lib/validation/schemas"
+import { getStellarConfigReport } from "@/server/stellar/network-config"
 import { safeCatchError } from "@/lib/errors/safe-error"
 
 async function withRetry<T>(fn: () => Promise<T>, label: string): Promise<T> {
@@ -137,6 +138,18 @@ export async function POST(req: NextRequest) {
     if (!contractAddress) {
       console.error("[MINT] ENERGY_TOKEN contract not configured")
       return NextResponse.json({ error: "Server configuration error: missing contract" }, { status: 500 })
+    }
+
+    const stellarConfig = getStellarConfigReport()
+    if (!stellarConfig.writesEnabled) {
+      return NextResponse.json(
+        {
+          error: "Stellar write operations are disabled: configuration is invalid or incomplete",
+          code: "WRITES_DISABLED",
+          config_fingerprint: stellarConfig.fingerprint,
+        },
+        { status: 503 }
+      )
     }
 
     // --- Certificate flow ---
