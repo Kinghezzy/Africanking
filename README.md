@@ -203,6 +203,70 @@ cargo test
 
 ---
 
+## Backup, Restore & Disaster Recovery
+
+Operational runbook for the cooperative-management platform. Generation credits are assigned to cooperative members; this is **not** an external certificate marketplace and makes **no** I-REC/ESG certification claim. Stellar is the immutable evidence layer; the relational store is the operational system of record.
+
+### RPO / RTO targets
+
+| Data class | RPO | RTO | Notes |
+|------------|-----|-----|-------|
+| Relational DB (cooperatives, members, meters, readings, credit allocations) | ≤ 15 min | ≤ 2 h | Point-in-time recovery from continuous WAL archiving |
+| Migrations (`apps/api` schema) | 0 (versioned in git) | ≤ 30 min | Replayed from the exact commit/tag of the restored snapshot |
+| Audit records (append-only) | ≤ 15 min | ≤ 2 h | Restored with the DB; never edited in place |
+| Contract manifests (deployed contract IDs, wasm hashes, network) | 0 (versioned in git) | ≤ 15 min | Recovered from repo tag, cross-checked on-chain |
+
+### Backup scope
+
+- **Database:** automated daily full snapshot + continuous WAL/PITR archiving; retention 30 days.
+- **Migrations:** the schema is defined by versioned migrations in the repo — the backup records the deployed commit SHA so migrations can be replayed deterministically.
+- **Audit records:** append-only tables included in the same snapshot; treated as immutable evidence and never rewritten during restore.
+- **Contract manifests:** `energy_token`, `energy_distribution`, `community_governance` contract IDs, wasm hashes, and network are stored in the repo and re-verified against Stellar after restore.
+
+### Restore order
+
+1. Provision an isolated restore target (never restore over production).
+2. Restore the database snapshot to the target and replay WAL to the chosen recovery point.
+3. Check out the recorded commit SHA and apply migrations up to that point; confirm `migrate status` is clean.
+4. Restore audit records (already part of the snapshot) and verify append-only integrity.
+5. Load the contract manifests from the repo tag and confirm contract IDs/wasm hashes match the deployed contracts.
+6. Run post-restore consistency checks (below) before any traffic is pointed at the target.
+
+### Reconciliation against immutable Stellar evidence
+
+Stellar is the source of truth for on-chain facts; the DB is reconciled *to* it, never the reverse.
+
+- For each credit allocation / retirement in the restored DB, fetch the corresponding on-chain transaction and compare amount, member, cooperative, and timestamp.
+- Any DB record with no on-chain counterpart is flagged as a **data gap** (candidate for re-issue or manual review) — never silently deleted.
+- Any on-chain event missing from the DB is replayed from Stellar into the restored store.
+- Contract IDs and wasm hashes must match the manifest; a mismatch aborts the restore.
+
+### Post-restore consistency checks (automated)
+
+Run after every restore and on a schedule against production:
+
+- Row counts and checksums for cooperatives, members, meters, readings, allocations, audit tables vs. the snapshot baseline.
+- Every allocation/retirement has a matching Stellar transaction (no orphans in either direction).
+- Sum of member allocations per cooperative equals the minted total for that period.
+- Migration version equals the recorded commit SHA's latest migration.
+- Contract manifest IDs/hashes match the live network.
+
+### Staged restore rehearsal
+
+Rehearsals run on an isolated target using a sanitized snapshot (PII redacted). Record the following each run:
+
+| Metric | Target |
+|--------|--------|
+| Time to restore DB + replay WAL | ≤ 2 h |
+| Time to apply migrations | ≤ 30 min |
+| Time to reconcile against Stellar | ≤ 1 h |
+| Data gaps found (DB↔chain mismatches) | 0 unexplained |
+| Consistency checks passing | 100% |
+
+Sanitized rehearsal evidence (timings, gap counts, check results — no PII, no secrets) is attached to the tracking issue for each rehearsal. Any unexplained data gap or failed consistency check blocks sign-off and is documented as a migration/rollout requirement before the next release.
+
+---
+
 ## Roadmap
 
 | Level | What | Status |
@@ -215,38 +279,4 @@ cargo test
 
 ## Planned Stellar Ecosystem Integrations
 
-Africanking is designed to plug into Stellar's growing DeFi and payments ecosystem. Planned integrations from the [SCF Integration Track](https://stellar.gitbook.io/scf-handbook/scf-awards/build-award/integration-track/integration-list):
-
-| Integration | What it unlocks for Africanking |
-|-------------|------------------------------|
-| **[DeFindex](https://defindex.io)** | Cooperatives earn yield on certificate proceeds held in vaults — idle capital works while certificates wait for buyers |
-| **[Blend Protocol](https://blend.capital)** | Use certificates as collateral for credit lines — cooperatives access working capital without selling |
-| **USDC (Circle)** | Stablecoin payments for certificate purchases — buyers pay in USDC, cooperatives receive USDC, no FX volatility |
-| **[Aquarius](https://aquarius.network)** | Liquidity incentives for BETOKEN/USDC pairs — bootstraps the certificate secondary market |
-| **Fiat On/Off Ramp (SEP-24)** | Cooperatives receive payments in local fiat (ARS, COP, BRL) via Stellar anchors — no crypto knowledge required |
-| **[Stellar Turrets / smart oracles](https://tss.stellar.org)** | Automated certificate minting triggered by verified IoT meter readings — removes manual intervention |
-
-These integrations are load-bearing features on the product roadmap, not checkbox items. DeFindex is the most immediate — partial integration already exists in the codebase.
-
----
-
-## Contributing
-
-PRs welcome. Branch to `develop`, keep commits focused.
-
-```bash
-git checkout develop
-git checkout -b feat/your-feature
-pnpm install && pnpm dev
-# Open PR to develop
-```
-
----
-
-## License
-
-Apache-2.0 — See [LICENSE](LICENSE)
-
----
-
-**Built on Stellar · BuenDia Builders 2026**
+Africanking is designed to p
