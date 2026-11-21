@@ -41,3 +41,21 @@ All contract writes (`/api/mint`, `/api/certificates/retire`) go through `server
 Ambiguous network errors during submission re-send the **same signed envelope**, never a rebuilt transaction, so a retry cannot double-mint. Every failure is written to `audit_log` with its structured reason and hash.
 
 Rollout note: legacy readings now keep `status = 'pending'` with `tx_hash` set while an outcome is unknown, and `/api/mint` answers `409 UNRECONCILED_TRANSACTION` until an operator reconciles them. Only non-retryable failures that never reached the ledger still mark a reading `failed`.
+
+## Soroban event index
+
+`server/stellar/event-indexer.ts` ingests contract events into `chain_events`. It covers every cooperative's token and distribution contract, plus the configured global contracts.
+
+- **Durable cursor**: `chain_event_cursors` holds one row per stream. Events are written before the cursor moves, so a crash only replays the last page.
+- **Idempotent**: `UNIQUE (network, event_id)`. Replays and overlapping backfills never create duplicates.
+- **Gap detection**: if the stored position has fallen out of the RPC retention window, or the RPC rejects the cursor, the missing ledger range goes into `chain_event_gaps` and ingestion resumes from the oldest available ledger. Call `/api/indexer/run?backfill_gaps=true` (using `INDEXER_RPC_URL` pointed at an archive RPC if needed) to re-ingest open gaps. Each backfill is capped at `INDEXER_MAX_BACKFILL_LEDGERS`.
+- **Read API**: `GET /api/cooperatives/:id/events?limit=&type=&before=` returns that cooperative's indexed history to its members only, newest first, paginated by `event_id`.
+
+### Rollout
+
+1. Apply `db/migrations/20261121_soroban_event_index.sql`. It is additive only: no existing table or row changes.
+2. Set `INDEXER_CRON_SECRET`, and optionally `INDEXER_START_LEDGER` (otherwise the first run backfills at most `INDEXER_MAX_BACKFILL_LEDGERS`).
+3. Schedule `GET /api/indexer/run` (for example every minute) with `Authorization: Bearer $INDEXER_CRON_SECRET`.
+4. Watch the response's `gapsDetected` field, and the `chain_event_gaps` rows where `resolved_at IS NULL`.
+
+The existing `events` table and activity feed are unchanged. The new index sits alongside them as a replayable read model.
