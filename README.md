@@ -203,80 +203,42 @@ cargo test
 
 ---
 
+## Service-Level Objectives & Degradation Policy
+
+Operational targets for the cooperative-management platform. Generation credits are assigned to cooperative members; this is **not** an external certificate marketplace and makes **no** I-REC/ESG certification claim. Stellar is the immutable evidence layer; the relational store is the operational system of record.
+
+### SLOs
+
+| Area | SLO | Target | Window | Measurement |
+|------|-----|--------|--------|-------------|
+| API availability | Successful (non-5xx) responses on `/api/*` | ≥ 99.5% | 30 days rolling | `http_requests_total` by status class |
+| Reading ingestion latency | `POST /api/meters/readings` p95 | ≤ 800 ms | 30 days rolling | `http_request_duration_seconds` histogram |
+| Chain status freshness | Age of last successful Stellar RPC status check | ≤ 60 s | 30 days rolling | `chain_status_age_seconds` gauge |
+| Data durability | Successful Supabase writes / attempted writes | ≥ 99.9% | 30 days rolling | `db_write_errors_total` vs `db_writes_total` |
+
+Error budget = 100% − SLO target over the window (e.g. API availability budget ≈ 3.6 h/month).
+
+### Degradation policy (user-visible behavior)
+
+| Dependency / SLO at risk | User-visible behavior |
+|--------------------------|-----------------------|
+| API availability budget < 25% | Banner: "Degraded performance — some actions may be slow." Read paths stay up; non-critical writes queued. |
+| Ingestion latency p95 > 800 ms | Readings still accepted; UI shows "Processing" state and retries idempotently. |
+| Chain status stale > 60 s | Chain-backed actions (mint/retire) disabled with "Chain temporarily unavailable — retry shortly"; cached balances shown read-only. |
+| Data durability budget < 25% | Writes fail closed with explicit error; no silent data loss; operators paged. |
+
+### Error-budget review & capacity
+
+- Weekly review of error-budget burn against the 30-day windows above.
+- When burn rate exceeds 2× the sustainable rate, freeze non-critical rollouts and update capacity assumptions (instance count, DB pool size, RPC rate limits) in the operations runbook.
+- Dashboards and alert rules live in `docs/operations/observability-runbook.md`; alerting is validated against a controlled SLO breach before each release.
+
+---
+
 ## Backup, Restore & Disaster Recovery
 
 Operational runbook for the cooperative-management platform. Generation credits are assigned to cooperative members; this is **not** an external certificate marketplace and makes **no** I-REC/ESG certification claim. Stellar is the immutable evidence layer; the relational store is the operational system of record.
 
 ### RPO / RTO targets
 
-| Data class | RPO | RTO | Notes |
-|------------|-----|-----|-------|
-| Relational DB (cooperatives, members, meters, readings, credit allocations) | ≤ 15 min | ≤ 2 h | Point-in-time recovery from continuous WAL archiving |
-| Migrations (`apps/api` schema) | 0 (versioned in git) | ≤ 30 min | Replayed from the exact commit/tag of the restored snapshot |
-| Audit records (append-only) | ≤ 15 min | ≤ 2 h | Restored with the DB; never edited in place |
-| Contract manifests (deployed contract IDs, wasm hashes, network) | 0 (versioned in git) | ≤ 15 min | Recovered from repo tag, cross-checked on-chain |
-
-### Backup scope
-
-- **Database:** automated daily full snapshot + continuous WAL/PITR archiving; retention 30 days.
-- **Migrations:** the schema is defined by versioned migrations in the repo — the backup records the deployed commit SHA so migrations can be replayed deterministically.
-- **Audit records:** append-only tables included in the same snapshot; treated as immutable evidence and never rewritten during restore.
-- **Contract manifests:** `energy_token`, `energy_distribution`, `community_governance` contract IDs, wasm hashes, and network are stored in the repo and re-verified against Stellar after restore.
-
-### Restore order
-
-1. Provision an isolated restore target (never restore over production).
-2. Restore the database snapshot to the target and replay WAL to the chosen recovery point.
-3. Check out the recorded commit SHA and apply migrations up to that point; confirm `migrate status` is clean.
-4. Restore audit records (already part of the snapshot) and verify append-only integrity.
-5. Load the contract manifests from the repo tag and confirm contract IDs/wasm hashes match the deployed contracts.
-6. Run post-restore consistency checks (below) before any traffic is pointed at the target.
-
-### Reconciliation against immutable Stellar evidence
-
-Stellar is the source of truth for on-chain facts; the DB is reconciled *to* it, never the reverse.
-
-- For each credit allocation / retirement in the restored DB, fetch the corresponding on-chain transaction and compare amount, member, cooperative, and timestamp.
-- Any DB record with no on-chain counterpart is flagged as a **data gap** (candidate for re-issue or manual review) — never silently deleted.
-- Any on-chain event missing from the DB is replayed from Stellar into the restored store.
-- Contract IDs and wasm hashes must match the manifest; a mismatch aborts the restore.
-
-### Post-restore consistency checks (automated)
-
-Run after every restore and on a schedule against production:
-
-- Row counts and checksums for cooperatives, members, meters, readings, allocations, audit tables vs. the snapshot baseline.
-- Every allocation/retirement has a matching Stellar transaction (no orphans in either direction).
-- Sum of member allocations per cooperative equals the minted total for that period.
-- Migration version equals the recorded commit SHA's latest migration.
-- Contract manifest IDs/hashes match the live network.
-
-### Staged restore rehearsal
-
-Rehearsals run on an isolated target using a sanitized snapshot (PII redacted). Record the following each run:
-
-| Metric | Target |
-|--------|--------|
-| Time to restore DB + replay WAL | ≤ 2 h |
-| Time to apply migrations | ≤ 30 min |
-| Time to reconcile against Stellar | ≤ 1 h |
-| Data gaps found (DB↔chain mismatches) | 0 unexplained |
-| Consistency checks passing | 100% |
-
-Sanitized rehearsal evidence (timings, gap counts, check results — no PII, no secrets) is attached to the tracking issue for each rehearsal. Any unexplained data gap or failed consistency check blocks sign-off and is documented as a migration/rollout requirement before the next release.
-
----
-
-## Roadmap
-
-| Level | What | Status |
-|-------|------|--------|
-| 1 — Internal registry | Token = verifiable production record | ✅ Live on Testnet |
-| 2 — Verified certification | IoT oracles + independent meter validation | 🔄 Next |
-| 3 — Recognized standard | Integration with I-REC, Energy Web, TIGR | 🔮 Future |
-
----
-
-## Planned Stellar Ecosystem Integrations
-
-Africanking is designed to p
+| Data class |
