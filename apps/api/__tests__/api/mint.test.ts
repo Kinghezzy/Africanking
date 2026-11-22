@@ -96,6 +96,7 @@ vi.mock("@/lib/contracts-config", () => ({
 }))
 
 import { POST } from "@/app/api/mint/route"
+import { createEvidenceReference } from "@/lib/evidence"
 
 function makeRequest(body: Record<string, unknown>) {
   return new NextRequest("http://localhost/api/mint", {
@@ -188,6 +189,7 @@ describe("POST /api/mint", () => {
         kwh_injected: 4.25,
         kwh_generated: 7,
         kwh_self_consumed: 2,
+        reading_date: "2026-11-01",
         prosumers: { stellar_address: ADDR },
       },
       error: null,
@@ -211,6 +213,7 @@ describe("POST /api/mint", () => {
         kwh_injected: null,
         kwh_generated: 8,
         kwh_self_consumed: 3,
+        reading_date: "2026-11-01",
         prosumers: { stellar_address: ADDR },
       },
       error: null,
@@ -278,6 +281,7 @@ describe("POST /api/mint", () => {
         kwh_injected: null,
         kwh_generated: 3,
         kwh_self_consumed: 5,
+        reading_date: "2026-11-01",
         prosumers: { stellar_address: ADDR },
       },
       error: null,
@@ -288,5 +292,24 @@ describe("POST /api/mint", () => {
     const json = await res.json()
     expect(json.amount_hdrop).toBe(0)
     expect(mockNativeToScVal).toHaveBeenCalledWith(BigInt(0), { type: "i128" })
+  })
+
+  it("crea referencias vinculadas sin datos personales", () => {
+    const evidence = createEvidenceReference({
+      cooperativeId: COOP_ID,
+      periodStart: "2026-11-01",
+      periodEnd: "2026-11-30",
+      operationId: "operation-001",
+      amountKwh: 5,
+    })
+
+    expect(evidence.cooperative_id).toBe(COOP_ID)
+    expect(evidence.period_start).toBe("2026-11-01")
+    expect(evidence.period_end).toBe("2026-11-30")
+    expect(evidence.operation_id).toBe("operation-001")
+    expect(evidence.evidence_version).toBe(1)
+    expect(evidence.evidence_hash).toMatch(/^[a-f0-9]{64}$/)
+    expect(evidence.evidence_ref).toContain("#sha256=")
+    expect(evidence.evidence_ref).not.toMatch(/name|email|meter_payload|personal/i)
   })
 })
