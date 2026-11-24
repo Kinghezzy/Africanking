@@ -46,7 +46,8 @@ function rethrowTyped(err: unknown, message: string): never {
 const toStroops = (amount: number) => BigInt(Math.round(amount * 1e7))
 
 export function useEnergyToken() {
-  const { address, kit } = useWallet()
+  const { address } = useWallet()
+  const write = useContractWrite()
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 

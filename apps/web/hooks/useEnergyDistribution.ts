@@ -14,7 +14,8 @@ import {
 } from "@/lib/stellar/resilience"
 
 export function useEnergyDistribution() {
-  const { address, kit } = useWallet()
+  const { address } = useWallet()
+  const write = useContractWrite()
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
