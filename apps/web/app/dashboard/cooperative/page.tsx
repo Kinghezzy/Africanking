@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useMemo } from "react"
+import { useState, useEffect, useMemo, useCallback } from "react"
 import { useRouter } from "next/navigation"
 import { useWallet } from "@/lib/wallet-context"
 import { useAuth } from "@/lib/auth-context"
@@ -106,6 +106,7 @@ export default function CooperativeAdminPage() {
   const handleMint = async (certId: string) => {
     setMintingCertId(certId)
     setMintError(null)
+    setMintNotice(null)
     try {
       const res = await fetch("/api/mint", {
         method: "POST",
@@ -113,15 +114,53 @@ export default function CooperativeAdminPage() {
         body: JSON.stringify({ certificate_id: certId }),
       })
       const data = await res.json()
+      if (res.status === 202) {
+        // Submitted without a verdict — neither success nor failure is known.
+        setMintNotice(t("chain.mint.pending").replace("{hash}", `${String(data.tx_hash).slice(0, 10)}…`))
+        refetch()
+        return
+      }
+      if (res.status === 503) {
+        setMintError(t("chain.mint.unavailable"))
+        return
+      }
       if (!res.ok) {
         setMintError(data.error || "Mint failed")
         return
       }
       refetch()
     } catch (err) {
+      // The request itself failed: we cannot tell whether the server submitted
+      // anything, so refresh state instead of declaring failure.
       setMintError(err instanceof Error ? err.message : "Network error")
+      refetch()
     } finally {
       setMintingCertId(null)
+    }
+  }
+
+  const handleReconcileMint = async (certId: string) => {
+    setReconcilingCertId(certId)
+    setMintError(null)
+    try {
+      const res = await fetch("/api/mint/reconcile", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ certificate_id: certId }),
+      })
+      const data = await res.json()
+      if (res.status === 202) {
+        setMintNotice(t("chain.mint.pending").replace("{hash}", `${String(data.tx_hash).slice(0, 10)}…`))
+      } else if (!res.ok) {
+        setMintError(data.error || "Reconcile failed")
+      } else {
+        setMintNotice(null)
+      }
+      refetch()
+    } catch (err) {
+      setMintError(err instanceof Error ? err.message : "Network error")
+    } finally {
+      setReconcilingCertId(null)
     }
   }
 
@@ -134,6 +173,8 @@ export default function CooperativeAdminPage() {
         <DashboardHeader />
 
         <div className="p-4 md:p-6 space-y-6">
+          <PendingChainWritesNotice />
+
           {/* ── Header + Coop selector ── */}
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
@@ -378,23 +419,46 @@ export default function CooperativeAdminPage() {
                                   {cert.technology} · {new Date(cert.generation_period_start).toLocaleDateString()} – {new Date(cert.generation_period_end).toLocaleDateString()}
                                 </p>
                               </div>
-                              <Button
-                                size="sm"
-                                onClick={() => handleMint(cert.id)}
-                                disabled={mintingCertId !== null}
-                                className="bg-solar-yellow text-foreground hover:bg-solar-yellow/90"
-                              >
-                                {mintingCertId === cert.id ? (
-                                  <span className="flex items-center gap-2">
-                                    <span className="w-4 h-4 border-2 border-foreground/30 border-t-foreground rounded-full animate-spin" />
-                                    Minting...
-                                  </span>
-                                ) : (
-                                  t("coopAdmin.mint")
-                                )}
-                              </Button>
+                              {cert.mint_tx_hash ? (
+                                // A mint was submitted but never confirmed: offer a
+                                // status check, never a second mint.
+                                <div className="flex items-center gap-2">
+                                  <span className="text-xs text-solar-orange">{t("chain.mint.awaiting")}</span>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => handleReconcileMint(cert.id)}
+                                    disabled={reconcilingCertId !== null}
+                                  >
+                                    {reconcilingCertId === cert.id ? <Spinner className="size-4" /> : t("chain.mint.checkStatus")}
+                                  </Button>
+                                </div>
+                              ) : (
+                                <Button
+                                  size="sm"
+                                  onClick={() => handleMint(cert.id)}
+                                  disabled={mintingCertId !== null}
+                                  className="bg-solar-yellow text-foreground hover:bg-solar-yellow/90"
+                                >
+                                  {mintingCertId === cert.id ? (
+                                    <span className="flex items-center gap-2">
+                                      <span className="w-4 h-4 border-2 border-foreground/30 border-t-foreground rounded-full animate-spin" />
+                                      Minting...
+                                    </span>
+                                  ) : (
+                                    t("coopAdmin.mint")
+                                  )}
+                                </Button>
+                              )}
                             </div>
                           ))}
+                      </div>
+                    )}
+
+                    {mintNotice && (
+                      <div role="status" className="mt-3 border border-solar-orange/30 rounded-lg p-3 bg-solar-orange/10 flex items-center gap-2">
+                        <AlertCircle className="w-4 h-4 text-solar-orange shrink-0" />
+                        <p className="text-sm text-solar-orange">{mintNotice}</p>
                       </div>
                     )}
 
