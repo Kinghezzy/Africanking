@@ -201,41 +201,52 @@ stellar contract build
 cargo test
 ```
 
----
-
-## Testing
+**Deploy the cooperative contracts to Testnet:** see
+[`apps/contracts/DEPLOYMENT.md`](apps/contracts/DEPLOYMENT.md) for secure key
+setup, dry-run previews, deployment, and generated manifests. The deployment
+flow supports cooperative member generation-credit allocation; it is not an
+external certificate marketplace or I-REC/ESG certification.
 
 API and web tests run in CI on every pull request (`.github/workflows/ci.yml`).
 The workflow installs with a frozen lockfile (`pnpm install --frozen-lockfile`),
 caches the pnpm store, and fails the PR on any regression.
 
-Run the same focused suites locally from the repository root:
+## Service-Level Objectives & Degradation Policy
 
-```bash
-# API tests
-pnpm test:api
+Operational targets for the cooperative-management platform. Generation credits are assigned to cooperative members; this is **not** an external certificate marketplace and makes **no** I-REC/ESG certification claim. Stellar is the immutable evidence layer; the relational store is the operational system of record.
 
-# Web unit / component tests
-pnpm test:web
+### SLOs
 
-# Both (workspace test command)
-pnpm test
-```
+| Area | SLO | Target | Window | Measurement |
+|------|-----|--------|--------|-------------|
+| API availability | Successful (non-5xx) responses on `/api/*` | ≥ 99.5% | 30 days rolling | `http_requests_total` by status class |
+| Reading ingestion latency | `POST /api/meters/readings` p95 | ≤ 800 ms | 30 days rolling | `http_request_duration_seconds` histogram |
+| Chain status freshness | Age of last successful Stellar RPC status check | ≤ 60 s | 30 days rolling | `chain_status_age_seconds` gauge |
+| Data durability | Successful Supabase writes / attempted writes | ≥ 99.9% | 30 days rolling | `db_write_errors_total` vs `db_writes_total` |
+
+Error budget = 100% − SLO target over the window (e.g. API availability budget ≈ 3.6 h/month).
+
+### Degradation policy (user-visible behavior)
+
+| Dependency / SLO at risk | User-visible behavior |
+|--------------------------|-----------------------|
+| API availability budget < 25% | Banner: "Degraded performance — some actions may be slow." Read paths stay up; non-critical writes queued. |
+| Ingestion latency p95 > 800 ms | Readings still accepted; UI shows "Processing" state and retries idempotently. |
+| Chain status stale > 60 s | Chain-backed actions (mint/retire) disabled with "Chain temporarily unavailable — retry shortly"; cached balances shown read-only. |
+| Data durability budget < 25% | Writes fail closed with explicit error; no silent data loss; operators paged. |
+
+### Error-budget review & capacity
+
+- Weekly review of error-budget burn against the 30-day windows above.
+- When burn rate exceeds 2× the sustainable rate, freeze non-critical rollouts and update capacity assumptions (instance count, DB pool size, RPC rate limits) in the operations runbook.
+- Dashboards and alert rules live in `docs/operations/observability-runbook.md`; alerting is validated against a controlled SLO breach before each release.
 
 ---
 
-## Roadmap
+## Backup, Restore & Disaster Recovery
 
-| Level | What | Status |
-|-------|------|--------|
-| 1 — Internal registry | Token = verifiable production record | ✅ Live on Testnet |
-| 2 — Verified certification | IoT oracles + independent meter validation | 🔄 Next |
-| 3 — Recognized standard | Integration with I-REC, Energy Web, TIGR | 🔮 Future |
+Operational runbook for the cooperative-management platform. Generation credits are assigned to cooperative members; this is **not** an external certificate marketplace and makes **no** I-REC/ESG certification claim. Stellar is the immutable evidence layer; the relational store is the operational system of record.
 
----
+### RPO / RTO targets
 
-## Planned Stellar Ecosystem Integrations
-
-Africanking is designed to p
-
-/* … truncated 1684 chars — edit only what you need near the top … */
+| Data class |
