@@ -6,6 +6,7 @@ import { requireAuth, isSession } from "@/lib/auth/middleware"
 import { validateBody } from "@/lib/validation/validate"
 import { mintSchema } from "@/lib/validation/schemas"
 import { safeCatchError } from "@/lib/errors/safe-error"
+import { createEvidenceReference, type EvidenceFields } from "@/lib/evidence"
 
 async function withRetry<T>(fn: () => Promise<T>, label: string): Promise<T> {
   try {
@@ -50,7 +51,8 @@ async function mintOnChain(
   amountKwh: number,
   minterSecret: string,
   contractAddress: string,
-  onSubmitted?: (hash: string) => Promise<void>
+  onSubmitted?: (hash: string) => Promise<void>,
+  evidence?: EvidenceFields
 ) {
   const amountInStroops = BigInt(Math.round(amountKwh * 1e7))
   const server = new StellarSdk.rpc.Server(STELLAR_CONFIG.RPC_URL)
@@ -66,12 +68,26 @@ async function mintOnChain(
     timebounds: { minTime: 0, maxTime },
   })
     .addOperation(
-      contract.call(
+      evidence
+        ? contract.call(
+        "mint_energy_with_evidence",
+        StellarSdk.nativeToScVal(toAddress, { type: "address" }),
+        StellarSdk.nativeToScVal(amountInStroops, { type: "i128" }),
+        StellarSdk.nativeToScVal(minterPublic, { type: "address" }),
+        StellarSdk.nativeToScVal(evidence.cooperative_id, { type: "string" }),
+        StellarSdk.nativeToScVal(evidence.period_start, { type: "string" }),
+        StellarSdk.nativeToScVal(evidence.period_end, { type: "string" }),
+        StellarSdk.nativeToScVal(evidence.operation_id, { type: "string" }),
+        StellarSdk.nativeToScVal(Buffer.from(evidence.evidence_hash, "hex"), { type: "bytes" }),
+        StellarSdk.nativeToScVal(evidence.evidence_version, { type: "u32" }),
+        StellarSdk.nativeToScVal(evidence.evidence_ref, { type: "string" })
+          )
+        : contract.call(
         "mint_energy",
         StellarSdk.nativeToScVal(toAddress, { type: "address" }),
         StellarSdk.nativeToScVal(amountInStroops, { type: "i128" }),
         StellarSdk.nativeToScVal(minterPublic, { type: "address" })
-      )
+          )
     )
     .build()
 
@@ -182,6 +198,13 @@ export async function POST(req: NextRequest) {
       // Custodial model: tokens go to minter (platform holds them)
       const mintTo = StellarSdk.Keypair.fromSecret(minterSecret).publicKey()
       const tokenContract = coop.token_contract_address || contractAddress
+      const evidence = createEvidenceReference({
+        cooperativeId: cert.cooperative_id,
+        periodStart: cert.generation_period_start,
+        periodEnd: cert.generation_period_end,
+        operationId: certificateId!,
+        amountKwh: cert.total_kwh,
+      })
 
       const txHash = await mintOnChain(
         mintTo,
@@ -193,7 +216,8 @@ export async function POST(req: NextRequest) {
             .from("certificates")
             .update({ mint_tx_hash: submittedHash })
             .eq("id", certificateId)
-        }
+        },
+        evidence
       )
 
       await supabase
@@ -257,7 +281,33 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: message }, { status: 400 })
     }
 
-    const txHash = await mintOnChain(prosumerAddress, kwhAmount, minterSecret, contractAddress)
+    const periodDate =
+      reading.reading_date ??
+      (typeof reading.reading_timestamp === "string"
+        ? reading.reading_timestamp.slice(0, 10)
+        : null)
+    if (!periodDate) {
+      return NextResponse.json(
+        { error: "Reading requires reading_date or reading_timestamp for evidence period binding" },
+        { status: 400 }
+      )
+    }
+    const evidence = createEvidenceReference({
+      cooperativeId: reading.cooperative_id,
+      periodStart: periodDate,
+      periodEnd: periodDate,
+      operationId: readingId!,
+      amountKwh: kwhAmount,
+    })
+
+    const txHash = await mintOnChain(
+      prosumerAddress,
+      kwhAmount,
+      minterSecret,
+      contractAddress,
+      undefined,
+      evidence
+    )
 
     await supabase
       .from("readings")
