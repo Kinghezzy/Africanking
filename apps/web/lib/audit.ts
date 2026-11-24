@@ -7,7 +7,7 @@ export type AuditAction =
   | "retire"
   | "create_cooperative"
   | "add_member"
-  | "reconcile"
+  | "allocate_credit"
 
 interface AuditEntry {
   action: AuditAction

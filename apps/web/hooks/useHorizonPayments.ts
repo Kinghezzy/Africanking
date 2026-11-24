@@ -1,42 +1,75 @@
 "use client"
 
-import { useCallback, useMemo } from "react"
-import { APP_NETWORK, type StellarNetworkConfig } from "@/lib/stellar-network"
-import { fetchPaymentsPage } from "@/lib/activity/horizon"
-import type { ActivitySource, PaymentActivity } from "@/lib/activity/types"
-import { usePagedActivity, type PagedActivityState } from "./usePagedActivity"
+import { useCallback } from "react"
+import { STELLAR_CONFIG } from "@/lib/contracts-config"
+import { useChainRead } from "@/hooks/useChainRead"
+import type { FreshnessStatus } from "@/lib/stellar/resilience"
 
-export type { PaymentActivity } from "@/lib/activity/types"
+export interface HorizonPayment {
+  id: string
+  type: string
+  created_at: string
+  transaction_hash: string
+  asset_type: string
+  asset_code?: string
+  asset_issuer?: string
+  from?: string
+  to?: string
+  amount?: string
+  // For create_account operations (e.g. Friendbot funding)
+  funder?: string
+  account?: string
+  starting_balance?: string
+  // For path_payment, etc.
+  source_amount?: string
+  source_asset_code?: string
+}
 
-export interface UseHorizonPaymentsResult extends PagedActivityState<PaymentActivity> {
-  /** Alias of `records` kept for existing callers */
-  payments: PaymentActivity[]
-  source: ActivitySource
+interface UseHorizonPaymentsResult {
+  payments: HorizonPayment[]
+  isLoading: boolean
+  error: string | null
+  refetch: () => void
+  freshness: FreshnessStatus
+  fetchedAt: number | null
+  retry: { attempt: number; maxAttempts: number; nextRetryAt: number } | null
+}
+
+class HorizonHttpError extends Error {
+  constructor(readonly status: number) {
+    super(`Horizon API error: ${status}`)
+  }
+}
+
+export async function fetchHorizonPayments(address: string, fetchImpl: typeof fetch = fetch): Promise<HorizonPayment[]> {
+  const url = `${STELLAR_CONFIG.HORIZON_URL}/accounts/${address}/payments?order=desc&limit=50`
+  const response = await fetchImpl(url)
+  if (!response.ok) {
+    // Account not yet funded on testnet — the network positively says "no payments".
+    if (response.status === 404) return []
+    throw new HorizonHttpError(response.status)
+  }
+  const data = await response.json()
+  return data._embedded?.records ?? []
 }
 
 /**
- * Classic payment history from Horizon for `address`, on the app's single
- * validated network. Soroban token activity is NOT included — use
- * `useContractEvents` for that.
+ * Payments from Horizon. During an outage the last good page is served from
+ * cache (flagged via `freshness`) instead of an empty list that would imply
+ * the account has no activity.
  */
-export function useHorizonPayments(
-  address: string | null,
-  network: StellarNetworkConfig = APP_NETWORK,
-  pageSize = 50
-): UseHorizonPaymentsResult {
-  const key = address ? `${network.network}|${network.horizonUrl}|${address}` : null
+export function useHorizonPayments(address: string | null): UseHorizonPaymentsResult {
+  const fetcher = useCallback(() => fetchHorizonPayments(address!), [address])
+  const state = useChainRead(address ? `horizon.payments:${address}` : null, fetcher, "horizon.payments")
 
-  const fetchPage = useCallback(
-    (cursor: string | null) =>
-      fetchPaymentsPage({ horizonUrl: network.horizonUrl, address: address!, cursor, limit: pageSize }),
-    [network.horizonUrl, address, pageSize]
-  )
-
-  const state = usePagedActivity(key, fetchPage)
-  const source = useMemo<ActivitySource>(
-    () => ({ kind: "horizon", network: network.network, endpoint: new URL(network.horizonUrl).host }),
-    [network.network, network.horizonUrl]
-  )
-
-  return { ...state, payments: state.records, source }
+  return {
+    payments: state.value ?? [],
+    isLoading: !!address && (state.status === "loading" || (state.isRefreshing && state.value === null)),
+    // Stale data is surfaced through `freshness`, not as an error that hides it.
+    error: state.status === "unavailable" ? state.error : null,
+    refetch: state.refetch,
+    freshness: state.status,
+    fetchedAt: state.fetchedAt,
+    retry: state.retry,
+  }
 }

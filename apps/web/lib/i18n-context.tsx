@@ -1,6 +1,7 @@
 "use client"
 
 import { createContext, useContext, useState, useEffect, type ReactNode } from "react"
+import { featureTranslations } from "@/lib/i18n"
 
 type Language = "es" | "en"
 
@@ -12,7 +13,7 @@ interface I18nContextType {
 
 const I18nContext = createContext<I18nContextType | undefined>(undefined)
 
-const translations = {
+const baseTranslations = {
   es: {
     // Landing Page
     "landing.title": "Energía Verde Tokenizada",
@@ -192,6 +193,19 @@ const translations = {
     "sidebar.disconnect": "Desconectar",
     "sidebar.cooperative": "Mi Cooperativa",
     "sidebar.admin": "Administración",
+    "nav.primary": "Navegación principal",
+    "nav.platformAdmin": "Administración de plataforma",
+    "nav.cooperativeAdmin": "Administración de cooperativa",
+    "adminIa.platformScope": "Vista de toda la plataforma: estadísticas de todas las cooperativas y emisión de tokens HDROP. La gestión de miembros, medidores, lecturas y créditos se hace desde Administración de cooperativa.",
+    "adminIa.cooperativeScope": "Gestioná miembros, medidores, lecturas y la asignación de créditos de generación a los miembros de tu cooperativa.",
+    "adminIa.goToCooperativeAdmin": "Ir a Administración de cooperativa",
+    "adminIa.sections": "Secciones de administración",
+    "adminIa.section.overview": "Resumen",
+    "adminIa.section.cooperatives": "Cooperativas",
+    "adminIa.section.pipeline": "Pipeline de créditos",
+    "adminIa.section.activity": "Actividad on-chain",
+    "adminIa.section.token-issuance": "Emisión de tokens HDROP",
+    "adminIa.tokenIssuanceHelp": "Emití tokens HDROP desde la wallet con rol de minter. El contrato verifica el rol on-chain en cada operación.",
 
     // Activity Page
     "activity.description": "Historial de transacciones recibidas y enviadas",
@@ -614,6 +628,19 @@ const translations = {
     "sidebar.disconnect": "Disconnect",
     "sidebar.cooperative": "My Cooperative",
     "sidebar.admin": "Administration",
+    "nav.primary": "Primary navigation",
+    "nav.platformAdmin": "Platform admin",
+    "nav.cooperativeAdmin": "Cooperative admin",
+    "adminIa.platformScope": "Platform-wide view: statistics across all cooperatives and HDROP token issuance. Members, meters, readings and credits are managed from Cooperative admin.",
+    "adminIa.cooperativeScope": "Manage members, meters, readings and the assignment of generation credits to your cooperative's members.",
+    "adminIa.goToCooperativeAdmin": "Go to Cooperative admin",
+    "adminIa.sections": "Administration sections",
+    "adminIa.section.overview": "Overview",
+    "adminIa.section.cooperatives": "Cooperatives",
+    "adminIa.section.pipeline": "Credit pipeline",
+    "adminIa.section.activity": "On-chain activity",
+    "adminIa.section.token-issuance": "HDROP token issuance",
+    "adminIa.tokenIssuanceHelp": "Issue HDROP tokens from the wallet holding the minter role. The contract verifies the role on-chain for every operation.",
 
     // Activity Page
     "activity.description": "Transaction history of received and sent payments",
@@ -859,6 +886,11 @@ const translations = {
   },
 }
 
+const translations: Record<Language, Record<string, string>> = {
+  es: { ...baseTranslations.es, ...featureTranslations.es },
+  en: { ...baseTranslations.en, ...featureTranslations.en },
+}
+
 export function I18nProvider({ children }: { children: ReactNode }) {
   const [language, setLanguageState] = useState<Language>("es")
 
@@ -875,7 +907,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
   }
 
   const t = (key: string): string => {
-    return translations[language][key as keyof (typeof translations)["es"]] || key
+    return translations[language][key] || key
   }
 
   return <I18nContext.Provider value={{ language, setLanguage, t }}>{children}</I18nContext.Provider>
