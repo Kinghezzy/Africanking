@@ -201,6 +201,12 @@ stellar contract build
 cargo test
 ```
 
+**Deploy the cooperative contracts to Testnet:** see
+[`apps/contracts/DEPLOYMENT.md`](apps/contracts/DEPLOYMENT.md) for secure key
+setup, dry-run previews, deployment, and generated manifests. The deployment
+flow supports cooperative member generation-credit allocation; it is not an
+external certificate marketplace or I-REC/ESG certification.
+
 ---
 
 ## Roadmap
