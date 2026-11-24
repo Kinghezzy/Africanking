@@ -148,18 +148,34 @@ impl EnergyDistribution {
             return Err(DistributionError::PercentsMustSumTo100);
         }
 
-        // Limpiar datos de miembros anteriores para evitar datos huérfanos
+        let contract_addr = env.current_contract_address();
+
+        // Emit member_removed events for old members
         if let Some(old_list) = env.storage().instance().get::<_, Vec<Address>>(&DataKey::MemberList) {
             for old_member in old_list.iter() {
                 env.storage().persistent().remove(&DataKey::Member(old_member.clone()));
                 env.storage().persistent().remove(&DataKey::MemberPercent(old_member.clone()));
+                
+                env.events().publish(
+                    (
+                        soroban_sdk::Symbol::new(&env, "member_removed"),
+                        contract_addr.clone(),
+                        old_member.clone(),
+                    ),
+                    (
+                        contract_addr.clone(),
+                        old_member.clone(),
+                        env.ledger().timestamp(),
+                    ),
+                );
             }
         }
 
         // Crear lista de miembros
         let mut member_list: Vec<Address> = Vec::new(&env);
 
-        // Guardar miembros y sus porcentajes en persistent storage
+        // Guardar miembros y sus porcentajes en persistent storage, emit member_added eventos
+        let batch_total = members.len() as u32;
         for i in 0..members.len() {
             let member = members.get(i).unwrap();
             let percent = percents.get(i).unwrap();
@@ -177,7 +193,23 @@ impl EnergyDistribution {
             env.storage().persistent().extend_ttl(&member_key, PERSISTENT_TTL_THRESHOLD, PERSISTENT_TTL_EXTEND_TO);
             env.storage().persistent().extend_ttl(&percent_key, PERSISTENT_TTL_THRESHOLD, PERSISTENT_TTL_EXTEND_TO);
 
-            member_list.push_back(member);
+            member_list.push_back(member.clone());
+
+            env.events().publish(
+                (
+                    soroban_sdk::Symbol::new(&env, "member_added"),
+                    contract_addr.clone(),
+                    member.clone(),
+                ),
+                (
+                    contract_addr.clone(),
+                    member.clone(),
+                    percent,
+                    i as u32,
+                    batch_total,
+                    env.ledger().timestamp(),
+                ),
+            );
         }
 
         // Guardar lista de miembros (instance — shared config)
@@ -228,6 +260,10 @@ impl EnergyDistribution {
         // Crear cliente del token
         let token_client = energy_token_interface::EnergyTokenClient::new(&env, &token_contract);
 
+        let contract_addr = env.current_contract_address();
+        let mut allocation: Vec<(Address, u32, i128)> = Vec::new(&env);
+        let mut total_tokens_minted: i128 = 0;
+
         // Distribuir tokens a cada miembro según su porcentaje
         for i in 0..member_list.len() {
             let member = member_list.get(i).unwrap();
@@ -244,7 +280,10 @@ impl EnergyDistribution {
             let tokens_to_mint = (kwh_generated * percent as i128) / 100;
 
             // Mintear tokens al miembro
-            token_client.mint_energy(&member, &tokens_to_mint, &env.current_contract_address());
+            token_client.mint_energy(&member, &tokens_to_mint, &contract_addr);
+            
+            allocation.push_back((member, percent, tokens_to_mint));
+            total_tokens_minted += tokens_to_mint;
         }
 
         // Actualizar total generado
@@ -258,6 +297,21 @@ impl EnergyDistribution {
             .set(&DataKey::TotalGenerated, &(current_total + kwh_generated));
 
         env.storage().instance().extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_EXTEND_TO);
+
+        // Emit generation_recorded event
+        env.events().publish(
+            (
+                soroban_sdk::Symbol::new(&env, "generation_recorded"),
+                contract_addr.clone(),
+            ),
+            (
+                contract_addr,
+                kwh_generated,
+                allocation,
+                total_tokens_minted,
+                env.ledger().timestamp(),
+            ),
+        );
 
         Ok(())
     }
@@ -328,6 +382,20 @@ impl Pausable for EnergyDistribution {
         let admin = access_control::get_admin(e).expect("admin not set");
         assert!(caller == admin, "only admin can pause");
         pausable::pause(e);
+        
+        let contract_addr = e.current_contract_address();
+        e.events().publish(
+            (
+                soroban_sdk::Symbol::new(e, "contract_paused"),
+                contract_addr.clone(),
+            ),
+            (
+                contract_addr,
+                caller,
+                soroban_sdk::Symbol::new(e, "admin_pause"),
+                e.ledger().timestamp(),
+            ),
+        );
     }
 
     fn unpause(e: &Env, caller: Address) {
@@ -335,6 +403,19 @@ impl Pausable for EnergyDistribution {
         let admin = access_control::get_admin(e).expect("admin not set");
         assert!(caller == admin, "only admin can unpause");
         pausable::unpause(e);
+        
+        let contract_addr = e.current_contract_address();
+        e.events().publish(
+            (
+                soroban_sdk::Symbol::new(e, "contract_unpaused"),
+                contract_addr.clone(),
+            ),
+            (
+                contract_addr,
+                caller,
+                e.ledger().timestamp(),
+            ),
+        );
     }
 }
 

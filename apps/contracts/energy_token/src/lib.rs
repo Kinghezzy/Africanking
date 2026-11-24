@@ -85,6 +85,29 @@ impl EnergyToken {
     pub fn mint_energy(e: &Env, to: Address, amount: i128, minter: Address) {
         e.storage().instance().extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
         Base::mint(e, &to, amount);
+        
+        let contract_addr = e.current_contract_address();
+        let coop_id: String = e
+            .storage()
+            .instance()
+            .get(&DataKey::CooperativeId)
+            .unwrap_or_else(|| String::from_str(e, ""));
+        
+        e.events().publish(
+            (
+                soroban_sdk::Symbol::new(e, "token_minted"),
+                contract_addr.clone(),
+                to.clone(),
+            ),
+            (
+                contract_addr,
+                to,
+                amount,
+                minter,
+                coop_id,
+                e.ledger().timestamp(),
+            ),
+        );
     }
 
     /// Quema tokens cuando se consume energía
@@ -92,6 +115,29 @@ impl EnergyToken {
     pub fn burn_energy(e: &Env, from: Address, amount: i128) {
         e.storage().instance().extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
         Base::burn(e, &from, amount);
+        
+        let contract_addr = e.current_contract_address();
+        let coop_id: String = e
+            .storage()
+            .instance()
+            .get(&DataKey::CooperativeId)
+            .unwrap_or_else(|| String::from_str(e, ""));
+        
+        e.events().publish(
+            (
+                soroban_sdk::Symbol::new(e, "token_burned"),
+                contract_addr.clone(),
+                from.clone(),
+            ),
+            (
+                contract_addr,
+                from,
+                amount,
+                coop_id,
+                soroban_sdk::Symbol::new(e, "retirement"),
+                e.ledger().timestamp(),
+            ),
+        );
     }
 
     /// Otorga rol de minter a una nueva dirección
@@ -102,6 +148,28 @@ impl EnergyToken {
         admin.require_auth();
         e.storage().instance().extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
         access_control::grant_role_no_auth(e, &admin, &new_minter, &symbol_short!("minter"));
+        
+        let contract_addr = e.current_contract_address();
+        let coop_id: String = e
+            .storage()
+            .instance()
+            .get(&DataKey::CooperativeId)
+            .unwrap_or_else(|| String::from_str(e, ""));
+        
+        e.events().publish(
+            (
+                soroban_sdk::Symbol::new(e, "minter_granted"),
+                contract_addr.clone(),
+                new_minter.clone(),
+            ),
+            (
+                contract_addr,
+                new_minter,
+                admin,
+                coop_id,
+                e.ledger().timestamp(),
+            ),
+        );
     }
 
     /// Revoca rol de minter de una dirección
@@ -112,6 +180,28 @@ impl EnergyToken {
         admin.require_auth();
         e.storage().instance().extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
         access_control::revoke_role_no_auth(e, &admin, &minter, &symbol_short!("minter"));
+        
+        let contract_addr = e.current_contract_address();
+        let coop_id: String = e
+            .storage()
+            .instance()
+            .get(&DataKey::CooperativeId)
+            .unwrap_or_else(|| String::from_str(e, ""));
+        
+        e.events().publish(
+            (
+                soroban_sdk::Symbol::new(e, "minter_revoked"),
+                contract_addr.clone(),
+                minter.clone(),
+            ),
+            (
+                contract_addr,
+                minter,
+                admin,
+                coop_id,
+                e.ledger().timestamp(),
+            ),
+        );
     }
 
     /// Verifica si una dirección tiene rol de minter
@@ -214,6 +304,20 @@ impl Pausable for EnergyToken {
         let admin = access_control::get_admin(e).expect("admin not set");
         assert!(caller == admin, "only admin can pause");
         pausable::pause(e);
+        
+        let contract_addr = e.current_contract_address();
+        e.events().publish(
+            (
+                soroban_sdk::Symbol::new(e, "contract_paused"),
+                contract_addr.clone(),
+            ),
+            (
+                contract_addr,
+                caller,
+                soroban_sdk::Symbol::new(e, "admin_pause"),
+                e.ledger().timestamp(),
+            ),
+        );
     }
 
     fn unpause(e: &Env, caller: Address) {
@@ -221,6 +325,19 @@ impl Pausable for EnergyToken {
         let admin = access_control::get_admin(e).expect("admin not set");
         assert!(caller == admin, "only admin can unpause");
         pausable::unpause(e);
+        
+        let contract_addr = e.current_contract_address();
+        e.events().publish(
+            (
+                soroban_sdk::Symbol::new(e, "contract_unpaused"),
+                contract_addr.clone(),
+            ),
+            (
+                contract_addr,
+                caller,
+                e.ledger().timestamp(),
+            ),
+        );
     }
 }
 
