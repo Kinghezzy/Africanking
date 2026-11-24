@@ -7,7 +7,10 @@
 //! - Distribución automática de tokens según generación de kWh
 //! - Integración con token contract para minteo
 
-use soroban_sdk::{contract, contractimpl, contracttype, contracterror, Address, Env, Vec};
+use soroban_sdk::{
+    contract, contracterror, contractimpl, contracttype,
+    Address, BytesN, Env, String, Symbol, Vec,
+};
 use stellar_access::access_control::{self as access_control};
 use stellar_contract_utils::pausable::{self as pausable, Pausable};
 use stellar_contract_utils::upgradeable::UpgradeableInternal;
@@ -44,6 +47,18 @@ pub enum DistributionError {
 pub struct Member {
     pub address: Address,
     pub percent: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GenerationEvidence {
+    pub cooperative_id: String,
+    pub period_start: String,
+    pub period_end: String,
+    pub operation_id: String,
+    pub evidence_hash: BytesN<32>,
+    pub evidence_version: u32,
+    pub evidence_ref: String,
 }
 
 #[contracttype]
@@ -229,6 +244,37 @@ impl EnergyDistribution {
     /// Registra generación de energía y distribuye tokens
     #[when_not_paused]
     pub fn record_generation(env: Env, kwh_generated: i128) -> Result<(), DistributionError> {
+        Self::record_generation_internal(&env, kwh_generated)
+    }
+
+    /// Registra generación con referencias verificables que no contienen datos personales.
+    #[when_not_paused]
+    pub fn record_generation_with_evidence(
+        env: Env,
+        kwh_generated: i128,
+        evidence: GenerationEvidence,
+    ) -> Result<(), DistributionError> {
+        assert!(evidence.cooperative_id.len() > 0, "cooperative_id is required");
+        assert!(evidence.cooperative_id.len() <= 64, "cooperative_id is too long");
+        assert!(evidence.period_start.len() == 10, "period_start must use YYYY-MM-DD");
+        assert!(evidence.period_end.len() == 10, "period_end must use YYYY-MM-DD");
+        assert!(evidence.operation_id.len() > 0, "operation_id is required");
+        assert!(evidence.operation_id.len() <= 64, "operation_id is too long");
+        assert!(evidence.evidence_version == 1, "unsupported evidence version");
+        assert!(evidence.evidence_ref.len() > 0, "evidence_ref is required");
+        assert!(evidence.evidence_ref.len() <= 256, "evidence_ref is too long");
+
+        let result = Self::record_generation_internal(&env, kwh_generated);
+        if result.is_ok() {
+            env.events().publish(
+                (Symbol::new(&env, "gen_evidence"),),
+                (kwh_generated, evidence),
+            );
+        }
+        result
+    }
+
+    fn record_generation_internal(env: &Env, kwh_generated: i128) -> Result<(), DistributionError> {
         let admin = access_control::get_admin(&env).expect("admin not set");
         admin.require_auth();
 

@@ -8,7 +8,10 @@
 //! - Quema: Cuando se consume energía
 //! - Compatible con Stellar DEX para trading P2P
 
-use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, String};
+use soroban_sdk::{
+    contract, contractimpl, contracttype, symbol_short,
+    Address, BytesN, Env, String, Symbol,
+};
 use stellar_access::access_control::{self as access_control, AccessControl};
 use stellar_contract_utils::pausable::{self as pausable, Pausable};
 use stellar_contract_utils::upgradeable::UpgradeableInternal;
@@ -22,6 +25,18 @@ const MAX_COOPERATIVE_ID_LEN: u32 = 64;
 #[contracttype]
 pub enum DataKey {
     CooperativeId,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MintEvidence {
+    pub cooperative_id: String,
+    pub period_start: String,
+    pub period_end: String,
+    pub operation_id: String,
+    pub evidence_hash: BytesN<32>,
+    pub evidence_version: u32,
+    pub evidence_ref: String,
 }
 
 #[derive(Upgradeable)]
@@ -107,6 +122,49 @@ impl EnergyToken {
                 coop_id,
                 e.ledger().timestamp(),
             ),
+        );
+    }
+
+    /// Mint with a privacy-safe reference to reviewed cooperative evidence.
+    #[when_not_paused]
+    #[only_role(minter, "minter")]
+    pub fn mint_energy_with_evidence(
+        e: &Env,
+        to: Address,
+        amount: i128,
+        minter: Address,
+        cooperative_id: String,
+        period_start: String,
+        period_end: String,
+        operation_id: String,
+        evidence_hash: BytesN<32>,
+        evidence_version: u32,
+        evidence_ref: String,
+    ) {
+        let evidence = MintEvidence {
+            cooperative_id,
+            period_start,
+            period_end,
+            operation_id,
+            evidence_hash,
+            evidence_version,
+            evidence_ref,
+        };
+        assert!(evidence.cooperative_id.len() > 0, "cooperative_id is required");
+        assert!(evidence.cooperative_id.len() <= 64, "cooperative_id is too long");
+        assert!(evidence.period_start.len() == 10, "period_start must use YYYY-MM-DD");
+        assert!(evidence.period_end.len() == 10, "period_end must use YYYY-MM-DD");
+        assert!(evidence.operation_id.len() > 0, "operation_id is required");
+        assert!(evidence.operation_id.len() <= 64, "operation_id is too long");
+        assert!(evidence.evidence_version == 1, "unsupported evidence version");
+        assert!(evidence.evidence_ref.len() > 0, "evidence_ref is required");
+        assert!(evidence.evidence_ref.len() <= 256, "evidence_ref is too long");
+
+        e.storage().instance().extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
+        Base::mint(e, &to, amount);
+        e.events().publish(
+            (Symbol::new(e, "mint_evidence"),),
+            (amount, evidence),
         );
     }
 
