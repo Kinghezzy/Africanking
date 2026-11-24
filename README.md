@@ -207,7 +207,9 @@ setup, dry-run previews, deployment, and generated manifests. The deployment
 flow supports cooperative member generation-credit allocation; it is not an
 external certificate marketplace or I-REC/ESG certification.
 
----
+API and web tests run in CI on every pull request (`.github/workflows/ci.yml`).
+The workflow installs with a frozen lockfile (`pnpm install --frozen-lockfile`),
+caches the pnpm store, and fails the PR on any regression.
 
 ## Service-Level Objectives & Degradation Policy
 
