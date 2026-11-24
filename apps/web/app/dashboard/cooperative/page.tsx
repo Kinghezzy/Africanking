@@ -25,9 +25,7 @@ import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from "recharts"
 import { InfoTooltip } from "@/components/shared/info-tooltip"
-import { useEnergyToken } from "@/hooks/useEnergyToken"
-import { useChainRead } from "@/hooks/useChainRead"
-import { PendingChainWritesNotice } from "@/components/shared/pending-chain-writes"
+import { ADMIN_ROUTES } from "@/lib/navigation/admin-routes"
 
 type Period = "week" | "month" | "year"
 
@@ -50,19 +48,6 @@ export default function CooperativeAdminPage() {
   const [showSubmitReading, setShowSubmitReading] = useState(false)
   const [mintingCertId, setMintingCertId] = useState<string | null>(null)
   const [mintError, setMintError] = useState<string | null>(null)
-  const [mintNotice, setMintNotice] = useState<string | null>(null)
-  const [reconcilingCertId, setReconcilingCertId] = useState<string | null>(null)
-  const { getBalance } = useEnergyToken()
-  const minterAddress = process.env.NEXT_PUBLIC_ADMIN_ADDRESS
-  const fetchMinterBalance = useCallback(() => getBalance(minterAddress!), [getBalance, minterAddress])
-  // Never render a default "0.00" when the RPC is unreachable — see useChainRead.
-  const minterBalanceRead = useChainRead(
-    session?.admin_cooperative_ids.length && minterAddress ? `token.balance:${minterAddress}` : null,
-    fetchMinterBalance,
-    "token.balance",
-  )
-  const hdropBalance = minterBalanceRead.value
-
   useEffect(() => {
     if (!walletPending && !authLoading && !isConnected) router.push("/")
   }, [isConnected, walletPending, authLoading, router])
@@ -198,7 +183,7 @@ export default function CooperativeAdminPage() {
               </div>
               <div>
                 <h1 className="text-2xl font-bold">{coopName || t("coopAdmin.title")}</h1>
-                <p className="text-sm text-muted-foreground">{t("coopAdmin.title")}</p>
+                <p className="text-sm text-muted-foreground">{t("adminIa.cooperativeScope")}</p>
               </div>
             </div>
             {adminCoopIds.length > 1 && (
@@ -287,7 +272,14 @@ export default function CooperativeAdminPage() {
                     <p className="text-xs text-muted-foreground">
                       {t("coopAdmin.members")}
                       <button
-                        onClick={() => {/* TODO: navigate to members page */}}
+                        type="button"
+                        onClick={() =>
+                          router.push(
+                            selectedCoopId
+                              ? `${ADMIN_ROUTES.cooperativeMembers}?coop=${encodeURIComponent(selectedCoopId)}`
+                              : ADMIN_ROUTES.cooperativeMembers,
+                          )
+                        }
                         className="ml-2 text-primary hover:underline"
                       >
                         {t("coopAdmin.viewMembers")} →
@@ -603,23 +595,6 @@ export default function CooperativeAdminPage() {
                 </CardContent>
               </Card>
               
-              {/* ── card HDROP ── 
-              {hdropBalance !== null && (
-                <Card className="border-l-4 border-l-solar-yellow">
-                  <CardContent className="p-4 flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <Zap className="w-4 h-4 text-solar-yellow" />
-                      <span className="text-sm font-medium">Balance HDROP</span>
-                      <InfoTooltip text="Tokens de energía certificada disponibles en la plataforma (1 HDROP = 1 kWh)" />
-                    </div>
-                    <div className="text-right">
-                      <p className="text-2xl font-bold text-solar-yellow">{hdropBalance}</p>
-                      <p className="text-xs text-muted-foreground">HDROP</p>
-                    </div>
-                  </CardContent>
-                </Card>
-              )}
-              */}
               {/* ── 5. Activity Feed (recent readings) ── */}
               <Card>
                 <CardHeader>

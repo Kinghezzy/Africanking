@@ -6,21 +6,44 @@ import { requireAuth, isSession } from "@/lib/auth/middleware"
 import { validateBody } from "@/lib/validation/validate"
 import { mintSchema } from "@/lib/validation/schemas"
 import { safeCatchError } from "@/lib/errors/safe-error"
-import { finalizeCertificateMint, finalizeReadingMint, getMintableKwh } from "@/lib/mint/finalize"
-import {
-  ChainUnavailableError,
-  isTransientChainError,
-  submitSignedTransaction,
-  withBackoff,
-  type ChainWriteOutcome,
-  type RpcWriteClient,
-} from "@/lib/stellar/resilience"
+import { createEvidenceReference, type EvidenceFields } from "@/lib/evidence"
 
-const DEFAULT_CONFIRM_TIMEOUT_MS = 90_000
+async function withRetry<T>(fn: () => Promise<T>, label: string): Promise<T> {
+  try {
+    return await fn()
+  } catch (err) {
+    console.warn(`[MINT] ${label} failed, retrying in 2s...`, err instanceof Error ? err.message : err)
+    await new Promise((r) => setTimeout(r, 2000))
+    return fn()
+  }
+}
 
-function confirmTimeoutMs() {
-  const raw = Number(process.env.MINT_CONFIRM_TIMEOUT_MS)
-  return Number.isFinite(raw) && raw >= 0 ? raw : DEFAULT_CONFIRM_TIMEOUT_MS
+async function markFailed(readingId: string, reason: string) {
+  await supabase
+    .from("readings")
+    .update({ status: "failed" })
+    .eq("id", readingId)
+  return NextResponse.json({ error: reason }, { status: 500 })
+}
+
+function getMintableKwh(reading: {
+  kwh_injected?: number | null
+  kwh_generated?: number | null
+  kwh_self_consumed?: number | null
+}) {
+  if (reading.kwh_injected != null) {
+    return reading.kwh_injected
+  }
+
+  if (reading.kwh_generated == null) {
+    throw new Error("Reading is missing both kwh_injected and kwh_generated")
+  }
+
+  if (reading.kwh_self_consumed == null) {
+    throw new Error("Reading requires kwh_self_consumed when kwh_injected is unavailable")
+  }
+
+  return Math.max(0, reading.kwh_generated - reading.kwh_self_consumed)
 }
 
 /**
@@ -37,13 +60,44 @@ async function mintOnChain(
   amountKwh: number,
   minterSecret: string,
   contractAddress: string,
-  onSubmitted: (hash: string) => Promise<void>,
-): Promise<ChainWriteOutcome> {
+  onSubmitted?: (hash: string) => Promise<void>,
+  evidence?: EvidenceFields
+) {
   const amountInStroops = BigInt(Math.round(amountKwh * 1e7))
   const server = new StellarSdk.rpc.Server(STELLAR_CONFIG.RPC_URL)
   const minterKeypair = StellarSdk.Keypair.fromSecret(minterSecret)
   const minterPublic = minterKeypair.publicKey()
   const contract = new StellarSdk.Contract(contractAddress)
+  const maxTime = Math.floor(Date.now() / 1000) + 300
+
+  const transaction = new StellarSdk.TransactionBuilder(minterAccount, {
+    fee: "100000",
+    networkPassphrase: NETWORK_PASSPHRASE,
+    timebounds: { minTime: 0, maxTime },
+  })
+    .addOperation(
+      evidence
+        ? contract.call(
+        "mint_energy_with_evidence",
+        StellarSdk.nativeToScVal(toAddress, { type: "address" }),
+        StellarSdk.nativeToScVal(amountInStroops, { type: "i128" }),
+        StellarSdk.nativeToScVal(minterPublic, { type: "address" }),
+        StellarSdk.nativeToScVal(evidence.cooperative_id, { type: "string" }),
+        StellarSdk.nativeToScVal(evidence.period_start, { type: "string" }),
+        StellarSdk.nativeToScVal(evidence.period_end, { type: "string" }),
+        StellarSdk.nativeToScVal(evidence.operation_id, { type: "string" }),
+        StellarSdk.nativeToScVal(Buffer.from(evidence.evidence_hash, "hex"), { type: "bytes" }),
+        StellarSdk.nativeToScVal(evidence.evidence_version, { type: "u32" }),
+        StellarSdk.nativeToScVal(evidence.evidence_ref, { type: "string" })
+          )
+        : contract.call(
+        "mint_energy",
+        StellarSdk.nativeToScVal(toAddress, { type: "address" }),
+        StellarSdk.nativeToScVal(amountInStroops, { type: "i128" }),
+        StellarSdk.nativeToScVal(minterPublic, { type: "address" })
+          )
+    )
+    .build()
 
   let preparedTx: StellarSdk.Transaction
   try {
@@ -169,12 +223,34 @@ export async function POST(req: NextRequest) {
       // Custodial model: tokens go to minter (platform holds them)
       const mintTo = StellarSdk.Keypair.fromSecret(minterSecret).publicKey()
       const tokenContract = coop.token_contract_address || contractAddress
+      const evidence = createEvidenceReference({
+        cooperativeId: cert.cooperative_id,
+        periodStart: cert.generation_period_start,
+        periodEnd: cert.generation_period_end,
+        operationId: certificateId!,
+        amountKwh: cert.total_kwh,
+      })
 
-      let outcome: ChainWriteOutcome
-      try {
-        outcome = await mintOnChain(mintTo, cert.total_kwh, minterSecret, tokenContract, async (submittedHash) => {
-          // Persist before waiting so a timeout can never lead to a blind re-mint.
-          await supabase.from("certificates").update({ mint_tx_hash: submittedHash }).eq("id", certificateId)
+      const txHash = await mintOnChain(
+        mintTo,
+        cert.total_kwh,
+        minterSecret,
+        tokenContract,
+        async (submittedHash) => {
+          await supabase
+            .from("certificates")
+            .update({ mint_tx_hash: submittedHash })
+            .eq("id", certificateId)
+        },
+        evidence
+      )
+
+      await supabase
+        .from("certificates")
+        .update({
+          status: "available",
+          mint_tx_hash: txHash,
+          token_amount: cert.total_kwh,
         })
       } catch (err) {
         if (err instanceof ChainUnavailableError) return unavailableResponse()
@@ -249,16 +325,33 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: message }, { status: 400 })
     }
 
-    let outcome: ChainWriteOutcome
-    try {
-      outcome = await mintOnChain(prosumerAddress, kwhAmount, minterSecret, contractAddress, async (submittedHash) => {
-        await supabase.from("readings").update({ tx_hash: submittedHash }).eq("id", readingId!)
-      })
-    } catch (err) {
-      // Not submitted → the reading keeps its status; it did not "fail".
-      if (err instanceof ChainUnavailableError) return unavailableResponse()
-      throw err
+    const periodDate =
+      reading.reading_date ??
+      (typeof reading.reading_timestamp === "string"
+        ? reading.reading_timestamp.slice(0, 10)
+        : null)
+    if (!periodDate) {
+      return NextResponse.json(
+        { error: "Reading requires reading_date or reading_timestamp for evidence period binding" },
+        { status: 400 }
+      )
     }
+    const evidence = createEvidenceReference({
+      cooperativeId: reading.cooperative_id,
+      periodStart: periodDate,
+      periodEnd: periodDate,
+      operationId: readingId!,
+      amountKwh: kwhAmount,
+    })
+
+    const txHash = await mintOnChain(
+      prosumerAddress,
+      kwhAmount,
+      minterSecret,
+      contractAddress,
+      undefined,
+      evidence
+    )
 
     if (outcome.status === "pending") {
       return pendingResponse(outcome.hash, { reading_id: readingId })
