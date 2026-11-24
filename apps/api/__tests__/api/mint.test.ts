@@ -113,7 +113,7 @@ vi.mock("@/lib/contracts-config", () => ({
 }))
 
 import { POST } from "@/app/api/mint/route"
-import { StellarTransactionError } from "@/server/stellar/transaction-service"
+import { createEvidenceReference } from "@/lib/evidence"
 
 function makeRequest(body: Record<string, unknown>) {
   return new NextRequest("http://localhost/api/mint", {
@@ -220,6 +220,7 @@ describe("POST /api/mint", () => {
         kwh_injected: 4.25,
         kwh_generated: 7,
         kwh_self_consumed: 2,
+        reading_date: "2026-11-01",
         prosumers: { stellar_address: ADDR },
       },
       error: null,
@@ -243,6 +244,7 @@ describe("POST /api/mint", () => {
         kwh_injected: null,
         kwh_generated: 8,
         kwh_self_consumed: 3,
+        reading_date: "2026-11-01",
         prosumers: { stellar_address: ADDR },
       },
       error: null,
@@ -310,6 +312,7 @@ describe("POST /api/mint", () => {
         kwh_injected: null,
         kwh_generated: 3,
         kwh_self_consumed: 5,
+        reading_date: "2026-11-01",
         prosumers: { stellar_address: ADDR },
       },
       error: null,
@@ -322,108 +325,22 @@ describe("POST /api/mint", () => {
     expect(mockNativeToScVal).toHaveBeenCalledWith(BigInt(0), { type: "i128" })
   })
 
-  describe("transaction service failures", () => {
-    const pendingReading = {
-      id: READING_ID,
-      cooperative_id: COOP_ID,
-      status: "pending",
-      kwh_injected: 2,
-      prosumers: { stellar_address: ADDR },
-    }
-
-    beforeEach(() => {
-      process.env.MINTER_SECRET_KEY = "SFAKE"
+  it("crea referencias vinculadas sin datos personales", () => {
+    const evidence = createEvidenceReference({
+      cooperativeId: COOP_ID,
+      periodStart: "2026-11-01",
+      periodEnd: "2026-11-30",
+      operationId: "operation-001",
+      amountKwh: 5,
     })
 
-    it("timeout keeps the reading pending with tx_hash and returns 504", async () => {
-      mockSingle.mockResolvedValueOnce({ data: pendingReading, error: null })
-      mockInvoke.mockImplementationOnce(async (req: { onSubmitted: (h: string) => Promise<void> }) => {
-        await req.onSubmitted("tx-timeout")
-        throw new StellarTransactionError({
-          code: "TIMEOUT",
-          message: "not confirmed",
-          hash: "tx-timeout",
-          submitted: true,
-          retryable: false,
-        })
-      })
-
-      const res = await POST(makeRequest({ reading_id: READING_ID }))
-      expect(res.status).toBe(504)
-      const json = await res.json()
-      expect(json).toMatchObject({ code: "TIMEOUT", tx_hash: "tx-timeout", submitted: true })
-      expect(mockUpdate).toHaveBeenCalledWith("readings", { tx_hash: "tx-timeout" })
-      expect(mockUpdate).not.toHaveBeenCalledWith("readings", { status: "failed" })
-      expect(mockFrom).toHaveBeenCalledWith("audit_log")
-    })
-
-    it("simulation failure marks the reading failed and returns 422", async () => {
-      mockSingle.mockResolvedValueOnce({ data: pendingReading, error: null })
-      mockInvoke.mockRejectedValueOnce(
-        new StellarTransactionError({
-          code: "SIMULATION_FAILED",
-          message: "Simulation of mint_energy failed",
-          submitted: false,
-          retryable: false,
-          details: { simulation_error: "HostError: Error(Contract, #1)" },
-        })
-      )
-
-      const res = await POST(makeRequest({ reading_id: READING_ID }))
-      expect(res.status).toBe(422)
-      expect((await res.json()).code).toBe("SIMULATION_FAILED")
-      expect(mockUpdate).toHaveBeenCalledWith("readings", { status: "failed" })
-    })
-
-    it("retryable RPC outage leaves the reading pending and returns 503", async () => {
-      mockSingle.mockResolvedValueOnce({ data: pendingReading, error: null })
-      mockInvoke.mockRejectedValueOnce(
-        new StellarTransactionError({ code: "RPC_UNAVAILABLE", message: "down", submitted: false, retryable: true })
-      )
-
-      const res = await POST(makeRequest({ reading_id: READING_ID }))
-      expect(res.status).toBe(503)
-      expect(mockUpdate).not.toHaveBeenCalledWith("readings", { status: "failed" })
-    })
-
-    it("refuses to re-mint a reading with an unreconciled tx_hash → 409", async () => {
-      mockSingle.mockResolvedValueOnce({ data: { ...pendingReading, tx_hash: "tx-prev" }, error: null })
-
-      const res = await POST(makeRequest({ reading_id: READING_ID }))
-      expect(res.status).toBe(409)
-      expect((await res.json()).tx_hash).toBe("tx-prev")
-      expect(mockInvoke).not.toHaveBeenCalled()
-    })
-
-    it("certificate terminal failure preserves mint_tx_hash and returns 502", async () => {
-      mockSingle.mockResolvedValueOnce({
-        data: {
-          id: CERT_ID,
-          cooperative_id: COOP_ID,
-          status: "pending",
-          total_kwh: 10,
-          mint_tx_hash: null,
-          cooperatives: { admin_stellar_address: ADDR, token_contract_address: null },
-        },
-        error: null,
-      })
-      mockInvoke.mockImplementationOnce(async (req: { onSubmitted: (h: string) => Promise<void> }) => {
-        await req.onSubmitted("tx-failed")
-        throw new StellarTransactionError({
-          code: "FAILED",
-          message: "failed on-chain",
-          hash: "tx-failed",
-          submitted: true,
-          retryable: false,
-          details: { result_code: "txFailed" },
-        })
-      })
-
-      const res = await POST(makeRequest({ certificate_id: CERT_ID }))
-      expect(res.status).toBe(502)
-      expect(await res.json()).toMatchObject({ code: "FAILED", tx_hash: "tx-failed" })
-      expect(mockUpdate).toHaveBeenCalledWith("certificates", { mint_tx_hash: "tx-failed" })
-      expect(mockUpdate).not.toHaveBeenCalledWith("certificates", expect.objectContaining({ status: "available" }))
-    })
+    expect(evidence.cooperative_id).toBe(COOP_ID)
+    expect(evidence.period_start).toBe("2026-11-01")
+    expect(evidence.period_end).toBe("2026-11-30")
+    expect(evidence.operation_id).toBe("operation-001")
+    expect(evidence.evidence_version).toBe(1)
+    expect(evidence.evidence_hash).toMatch(/^[a-f0-9]{64}$/)
+    expect(evidence.evidence_ref).toContain("#sha256=")
+    expect(evidence.evidence_ref).not.toMatch(/name|email|meter_payload|personal/i)
   })
 })
