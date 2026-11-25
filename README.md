@@ -201,70 +201,52 @@ stellar contract build
 cargo test
 ```
 
----
+**Deploy the cooperative contracts to Testnet:** see
+[`apps/contracts/DEPLOYMENT.md`](apps/contracts/DEPLOYMENT.md) for secure key
+setup, dry-run previews, deployment, and generated manifests. The deployment
+flow supports cooperative member generation-credit allocation; it is not an
+external certificate marketplace or I-REC/ESG certification.
 
-## Security Architecture — Threat Model
+API and web tests run in CI on every pull request (`.github/workflows/ci.yml`).
+The workflow installs with a frozen lockfile (`pnpm install --frozen-lockfile`),
+caches the pnpm store, and fails the PR on any regression.
 
-Africanking combines cooperative data, wallet identity, service-role database access, and a server-side minter key. This section is the maintained threat model for those trust boundaries. It is scoped to the current cooperative-management direction: generation credits are assigned to cooperative members. It is **not** an external certificate marketplace and makes **no** I-REC/ESG certification claim.
+## Service-Level Objectives & Degradation Policy
 
-### Assets
+Operational targets for the cooperative-management platform. Generation credits are assigned to cooperative members; this is **not** an external certificate marketplace and makes **no** I-REC/ESG certification claim. Stellar is the immutable evidence layer; the relational store is the operational system of record.
 
-| Asset | Where it lives | Why it matters |
-|-------|----------------|----------------|
-| Cooperative & member records | Supabase (Postgres) | Tenant data; cross-tenant reads are a breach |
-| Meter readings (ingestion) | Supabase + API | Source of truth for generation credits |
-| Generation credits / proto-certificates | `energy_token` (SEP-41) on Stellar | On-chain value assigned to members |
-| Member allocation state | `energy_distribution` contract | Determines who receives credits |
-| Governance proposals | `community_governance` contract | Cooperative decisions |
-| Minter key | Server-side secret (API env) | Can mint credits — highest-value secret |
-| Service-role DB key | Server-side secret (API env) | Bypasses row-level security |
-| Session JWTs | Client + API | Identity for all authenticated routes |
+### SLOs
 
-### Trust boundaries
+| Area | SLO | Target | Window | Measurement |
+|------|-----|--------|--------|-------------|
+| API availability | Successful (non-5xx) responses on `/api/*` | ≥ 99.5% | 30 days rolling | `http_requests_total` by status class |
+| Reading ingestion latency | `POST /api/meters/readings` p95 | ≤ 800 ms | 30 days rolling | `http_request_duration_seconds` histogram |
+| Chain status freshness | Age of last successful Stellar RPC status check | ≤ 60 s | 30 days rolling | `chain_status_age_seconds` gauge |
+| Data durability | Successful Supabase writes / attempted writes | ≥ 99.9% | 30 days rolling | `db_write_errors_total` vs `db_writes_total` |
 
-1. **Browser ↔ API** — untrusted client; every request is authenticated and tenant-scoped server-side.
-2. **API ↔ Supabase** — API holds the service-role key; RLS is bypassed here, so tenant scoping must be enforced in API code.
-3. **API ↔ Stellar (minter)** — server-side minter key signs mint/burn; never exposed to clients.
-4. **Meter/IoT ↔ Ingestion API** — external device input; treated as untrusted until validated.
-5. **Cooperative tenant ↔ cooperative tenant** — logical isolation enforced by cooperative ID on every query.
+Error budget = 100% − SLO target over the window (e.g. API availability budget ≈ 3.6 h/month).
 
-### Threat actors
+### Degradation policy (user-visible behavior)
 
-- **Anonymous internet attacker** — probes auth and ingestion endpoints.
-- **Authenticated member of another cooperative** — attempts cross-tenant access (IDOR).
-- **Malicious/compromised meter** — submits forged or inflated readings.
-- **Insider / compromised admin** — abuses privileged review, minting, or admin actions.
-- **Leaked-secret attacker** — obtains minter or service-role key.
+| Dependency / SLO at risk | User-visible behavior |
+|--------------------------|-----------------------|
+| API availability budget < 25% | Banner: "Degraded performance — some actions may be slow." Read paths stay up; non-critical writes queued. |
+| Ingestion latency p95 > 800 ms | Readings still accepted; UI shows "Processing" state and retries idempotently. |
+| Chain status stale > 60 s | Chain-backed actions (mint/retire) disabled with "Chain temporarily unavailable — retry shortly"; cached balances shown read-only. |
+| Data durability budget < 25% | Writes fail closed with explicit error; no silent data loss; operators paged. |
 
-### Abuse cases, mitigations, and verification
+### Error-budget review & capacity
 
-| Flow | Abuse case | Mitigation | Verification evidence |
-|------|-----------|------------|-----------------------|
-| **Authentication** | Forged/replayed JWT; wallet challenge replay | JWT verified server-side on every route; wallet challenge is single-use and signature-checked | Auth route tests + wallet challenge-response tests |
-| **Authentication** | Cross-tenant access via guessed IDs | Every query scoped by authenticated cooperative ID; service-role queries never trust client-supplied tenant | Tenant-isolation tests on API routes |
-| **Ingestion** | Forged/inflated meter readings | Meter authenticated; readings validated (range, monotonicity, period) before persistence | Ingestion validation tests |
-| **Review** | Member approves own or foreign-cooperative submission | Review actions require reviewer role within the same cooperative; separation of submit vs. approve | Review authorization tests |
-| **Minting** | Unauthorized or duplicate mint | Mint only via server-side minter key after review; idempotency on reading ID; `energy_token` mint restricted to minter authority | Contract tests (`energy_token`) + mint idempotency tests |
-| **Minting** | Minter key leak | Key stored only in server env, never shipped to client; rotation runbook | Secret-scanning CI + key-rotation operational control |
-| **Administration** | Privilege escalation / destructive admin action | Admin actions role-gated and audited; service-role key server-only | Admin authorization tests + audit-log operational control |
-| **Contracts** | Unauthorized allocation or governance change | `energy_distribution` and `community_governance` enforce caller authorization | Contract tests for both contracts |
-
-### Review process
-
-This threat model is reviewed and updated **whenever a new data source or privileged action is introduced** (new ingestion source, new admin/review/mint capability, new contract method, or new secret). Each high-risk scenario above must link to an automated test or an operational control; a change that adds a privileged action without such evidence is not mergeable.
+- Weekly review of error-budget burn against the 30-day windows above.
+- When burn rate exceeds 2× the sustainable rate, freeze non-critical rollouts and update capacity assumptions (instance count, DB pool size, RPC rate limits) in the operations runbook.
+- Dashboards and alert rules live in `docs/operations/observability-runbook.md`; alerting is validated against a controlled SLO breach before each release.
 
 ---
 
-## Roadmap
+## Backup, Restore & Disaster Recovery
 
-| Level | What | Status |
-|-------|------|--------|
-| 1 — Internal registry | Token = verifiable production record | ✅ Live on Testnet |
-| 2 — Verified certification | IoT oracles + independent meter validation | 🔄 Next |
-| 3 — Recognized standard | Integration with I-REC, Energy Web, TIGR | 🔮 Future |
+Operational runbook for the cooperative-management platform. Generation credits are assigned to cooperative members; this is **not** an external certificate marketplace and makes **no** I-REC/ESG certification claim. Stellar is the immutable evidence layer; the relational store is the operational system of record.
 
----
+### RPO / RTO targets
 
-## Planned Stellar Ecosystem Integrations
-
-Africanking is designed to plug into the wider Stellar ecosystem as the cooperative-credit model matures.
+| Data class |
