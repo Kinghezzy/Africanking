@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import * as StellarSdk from "@stellar/stellar-sdk"
 import { supabase } from "@/lib/supabase"
-import { CONTRACTS, STELLAR_CONFIG, NETWORK_PASSPHRASE } from "@/lib/contracts-config"
+import { CONTRACTS } from "@/lib/contracts-config"
 import { requireAuth, isSession } from "@/lib/auth/middleware"
 import { validateBody } from "@/lib/validation/validate"
 import { mintSchema } from "@/lib/validation/schemas"
@@ -159,6 +159,7 @@ export async function POST(req: NextRequest) {
   try {
     const session = await requireAuth()
     if (!isSession(session)) return session
+    actor = session.sub
 
     const body = await req.json()
     const v = validateBody(mintSchema, body)
@@ -177,6 +178,18 @@ export async function POST(req: NextRequest) {
     if (!contractAddress) {
       console.error("[MINT] ENERGY_TOKEN contract not configured")
       return NextResponse.json({ error: "Server configuration error: missing contract" }, { status: 500 })
+    }
+
+    const stellarConfig = getStellarConfigReport()
+    if (!stellarConfig.writesEnabled) {
+      return NextResponse.json(
+        {
+          error: "Stellar write operations are disabled: configuration is invalid or incomplete",
+          code: "WRITES_DISABLED",
+          config_fingerprint: stellarConfig.fingerprint,
+        },
+        { status: 503 }
+      )
     }
 
     // --- Certificate flow ---
@@ -221,7 +234,8 @@ export async function POST(req: NextRequest) {
         token_contract_address: string | null
       }
       // Custodial model: tokens go to minter (platform holds them)
-      const mintTo = StellarSdk.Keypair.fromSecret(minterSecret).publicKey()
+      const minterKeypair = StellarSdk.Keypair.fromSecret(minterSecret)
+      const mintTo = minterKeypair.publicKey()
       const tokenContract = coop.token_contract_address || contractAddress
       const evidence = createEvidenceReference({
         cooperativeId: cert.cooperative_id,

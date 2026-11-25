@@ -18,11 +18,13 @@ const {
 } = vi.hoisted(() => {
   const mockSingle = vi.fn()
   const mockEq: ReturnType<typeof vi.fn> = vi.fn(() => ({ single: mockSingle, eq: mockEq }))
-  const mockUpdate = vi.fn(() => ({ eq: mockEq }))
-  const mockInsert = vi.fn(() => ({ error: null }))
-  const mockFrom = vi.fn(() => ({
+  const mockInsert = vi.fn(() => ({ error: null, then: (cb: (r: { error: null }) => void) => cb({ error: null }) }))
+  const mockFrom = vi.fn((table: string) => ({
     select: vi.fn(() => ({ eq: mockEq })),
-    update: mockUpdate,
+    update: (payload: unknown) => {
+      mockUpdate(table, payload)
+      return { eq: mockEq }
+    },
     insert: mockInsert,
   }))
 
@@ -89,6 +91,21 @@ vi.mock("@stellar/stellar-sdk", () => ({
   BASE_FEE: "100",
 }))
 
+const stellarConfigState = vi.hoisted(() => ({ writesEnabled: true }))
+const { mockInvoke, mockUpdate } = vi.hoisted(() => ({ mockInvoke: vi.fn(), mockUpdate: vi.fn() }))
+
+vi.mock("@/server/stellar/transaction-service", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/stellar/transaction-service")>()),
+  getTransactionService: () => ({ invokeContract: mockInvoke }),
+}))
+
+vi.mock("@/server/stellar/network-config", () => ({
+  getStellarConfigReport: () => ({
+    writesEnabled: stellarConfigState.writesEnabled,
+    fingerprint: "sha256:test-fingerprint",
+  }),
+}))
+
 vi.mock("@/lib/contracts-config", () => ({
   CONTRACTS: { ENERGY_TOKEN: "CFAKECONTRACT" },
   STELLAR_CONFIG: { RPC_URL: "https://fake-rpc.stellar.org" },
@@ -110,11 +127,13 @@ describe("POST /api/mint", () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    stellarConfigState.writesEnabled = true
     process.env = { ...originalEnv }
     mockGetAccount.mockResolvedValue({ id: "account" })
     mockPrepareTransaction.mockResolvedValue({ sign: vi.fn() })
     mockSendTransaction.mockResolvedValue({ status: "PENDING", hash: "tx-hash-123" })
     mockGetTransaction.mockResolvedValue({ status: "SUCCESS" })
+    mockInvoke.mockResolvedValue({ status: "SUCCESS", hash: "tx-hash-123", ledger: 10, pollAttempts: 1 })
   })
 
   it("rechaza sin reading_id ni certificate_id → 400", async () => {
@@ -156,6 +175,18 @@ describe("POST /api/mint", () => {
 
     const res = await POST(makeRequest({ reading_id: READING_ID }))
     expect(res.status).toBe(500)
+  })
+
+  it("rechaza escrituras cuando la configuración Stellar es inválida → 503", async () => {
+    process.env.MINTER_SECRET_KEY = "SFAKE"
+    stellarConfigState.writesEnabled = false
+
+    const res = await POST(makeRequest({ reading_id: READING_ID }))
+    expect(res.status).toBe(503)
+    const json = await res.json()
+    expect(json.code).toBe("WRITES_DISABLED")
+    expect(json.config_fingerprint).toBe("sha256:test-fingerprint")
+    expect(mockInvoke).not.toHaveBeenCalled()
   })
 
   it("rechaza certificate con status != pending → 400", async () => {
